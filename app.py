@@ -5,16 +5,15 @@ from PIL import Image
 import cv2
 import numpy as np
 
-def detect_clothing(image_path, target_label):
+def detect_clothing(image_path):
     """
-    Detects a specific clothing type in an image and returns its bounding boxes.
+    Detects various clothing types in an image and returns a list of unique labels.
 
     Args:
         image_path (str): Path to the input image.
-        target_label (str): The clothing type to detect ('shirt', 't-shirt', 'pants', 'dress', 'coat').
 
     Returns:
-        list: A list of bounding boxes [(x, y, w, h)] for the target clothing type.
+        list: A list of unique detected clothing types (e.g., ['shirt', 'pants']).
     """
     try:
         model_config = "yolov8n.yaml"  # Replace with your model's config
@@ -34,27 +33,30 @@ def detect_clothing(image_path, target_label):
         net.setInput(blob)
         outs = net.forward(output_layers)
 
-        boxes = []
+        detected_labels = set()
         confidences = []
-        relevant_class_indices = []
+        boxes = []
 
         relevant_labels_map = {
-            'shirt': [60],
-            't-shirt': [61],
-            'pants': [56],
-            'dress': [58, 57], # Include skirt as potentially part of a 'dress' outfit
-            'coat': [59]
+            0: 'person',
+            56: 'pants',
+            57: 'skirt',
+            58: 'dress',
+            59: 'coat',
+            60: 'shirt',
+            61: 't-shirt'
         }
-
-        target_class_ids = relevant_labels_map.get(target_label.lower(), [])
+        target_labels = ['shirt', 't-shirt', 'pants', 'skirt', 'dress', 'coat']
 
         for out in outs:
             for detection in out:
                 scores = detection[5:]
                 class_id = np.argmax(scores)
                 confidence = scores[class_id]
+                label = relevant_labels_map.get(class_id)
 
-                if class_id in target_class_ids and confidence > 0.5:
+                if label in target_labels and confidence > 0.5:
+                    detected_labels.add(label)
                     center_x = int(detection[0] * width)
                     center_y = int(detection[1] * height)
                     w = int(detection[2] * width)
@@ -63,15 +65,16 @@ def detect_clothing(image_path, target_label):
                     y = int(center_y - h / 2)
                     boxes.append([x, y, w, h])
                     confidences.append(float(confidence))
-                    relevant_class_indices.append(class_id)
 
         indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
-        final_boxes = []
+        final_detected_labels = set()
         if indices is not None:
             for i in indices.flatten():
-                final_boxes.append(boxes[i])
+                # You could potentially get the label based on the class ID here if needed
+                # For now, we rely on the 'detected_labels' set
+                pass
 
-        return final_boxes
+        return list(detected_labels)
 
     except Exception as e:
         print(f"Error in detect_clothing: {e}")
@@ -94,50 +97,56 @@ def main():
     with col2:
         bottom_image = st.file_uploader("Upload Outfit Image", type=["jpg", "jpeg", "png"], key="bottom")
 
-    outfit_type = st.selectbox("Select Outfit Type to Circle", ["", "Shirt", "Pants", "Coat", "Dress"])
+    outfit_type_selection = st.selectbox("Select Expected Outfit Type", ["", "Top", "Bottom", "One Piece"])
 
     if st.button("Submit"):
         if not top_image:
             st.error("Please upload a Your image.")
         if not bottom_image:
             st.error("Please upload a Outfit image.")
-        if not outfit_type:
-            st.error("Please select an outfit type to circle.")
-        elif outfit_type == "":
-            st.error("Please select an outfit type to circle.")
-        elif top_image and bottom_image and outfit_type:
-            st.success(f"Circling '{outfit_type}' in the Outfit Image...")
+        if not outfit_type_selection:
+            st.error("Please select the expected outfit type.")
+        elif outfit_type_selection == "":
+            st.error("Please select the expected outfit type.")
+        elif top_image and bottom_image and outfit_type_selection:
+            st.success(f"Analyzing Outfit Image for type: '{outfit_type_selection}'...")
 
             top_image_pil = Image.open(top_image)
-            bottom_image_pil = Image.open(bottom_image)
-
             st.image(top_image_pil, caption="Your Image", use_container_width=True)
+
+            st.subheader("Outfit Image:")
+            st.image(bottom_image, caption="Outfit Image", use_container_width=True)
 
             # Save the outfit image temporarily for OpenCV
             with open("temp_outfit_image.jpg", "wb") as f:
                 f.write(bottom_image.read())
 
-            # Detect the specified clothing type
-            bounding_boxes = detect_clothing("temp_outfit_image.jpg", outfit_type)
-
-            # Draw circles around the detected clothing
-            img_cv = cv2.imread("temp_outfit_image.jpg")
-            if img_cv is not None:
-                for x, y, w, h in bounding_boxes:
-                    center_x = int(x + w / 2)
-                    center_y = int(y + h / 2)
-                    radius = int(max(w, h) / 2)
-                    cv2.circle(img_cv, (center_x, center_y), radius, (0, 255, 0), 3) # Green circle
-
-                # Convert the OpenCV image back to PIL for Streamlit
-                img_pil_circled = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
-                st.image(img_pil_circled, caption=f"Outfit Image with '{outfit_type}' Circled", use_container_width=True)
-            else:
-                st.error("Could not load the outfit image for drawing.")
-
+            # Detect clothing types in the outfit image
+            detected_clothes = detect_clothing("temp_outfit_image.jpg")
             os.remove("temp_outfit_image.jpg") # Clean up temporary file
 
-            st.write(f"Outfit Type Selected to Circle: {outfit_type}")
+            st.subheader("Detected Clothing in Outfit Image:")
+            if detected_clothes:
+                for cloth_type in detected_clothes:
+                    st.markdown(f"- {cloth_type.capitalize()}")
+
+                # Logic to extract outfit type based on detected clothes and user selection
+                extracted_outfit_type = "Unknown"
+                if outfit_type_selection == "Top":
+                    if any(item in ['shirt', 't-shirt'] for item in detected_clothes):
+                        extracted_outfit_type = "Top"
+                elif outfit_type_selection == "Bottom":
+                    if any(item in ['pants', 'skirt'] for item in detected_clothes):
+                        extracted_outfit_type = "Bottom"
+                elif outfit_type_selection == "One Piece":
+                    if 'dress' in detected_clothes:
+                        extracted_outfit_type = "One Piece"
+
+                st.subheader("Extracted Outfit Type:")
+                st.markdown(f"Based on the detected clothing and your selection, the extracted outfit type is: **{extracted_outfit_type}**")
+
+            else:
+                st.info("Could not detect any relevant clothing items in the outfit image to extract the type.")
 
 if __name__ == "__main__":
     main()
